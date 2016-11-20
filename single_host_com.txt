@@ -1,0 +1,118 @@
+一个主机上两个container互通原理
+
+
+
+同一个主机上运行两个容器：
+pi@raspberrypi:~ $ docker ps
+CONTAINER ID        IMAGE               COMMAND             CREATED             STATUS       
+d012bc351b15        647197174783        "/bin/sh"           34 seconds ago      Up 32 seconds
+6e93cf3c49e3        4d7ccbc584c8        "/bin/bash"         59 minutes ago      Up 59 minutes
+
+可以看到docker建立了一个docker0的bridge并且在host上创建了两个veth口
+pi@raspberrypi:~ $ brctl show
+bridge name	bridge id		STP enabled	interfaces
+docker0		8000.0242dd30d69f	no		veth194ad9a
+							            veth5c72358
+										
+注意观察一下veth口，
+pi@raspberrypi:~ $ ip link show veth5c72358
+36: veth5c72358@if35: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 qdisc noqueue master docker0 state UP mode DEFAULT group default 
+    link/ether 2a:84:36:05:d5:23 brd ff:ff:ff:ff:ff:ff
+pi@raspberrypi:~ $ ethtool -i veth5c72358
+driver: veth
+version: 1.0
+firmware-version: 
+bus-info: 
+supports-statistics: yes
+supports-test: no
+supports-eeprom-access: no
+supports-register-dump: no
+supports-priv-flags: no
+pi@raspberrypi:~ $ ethtool -S veth5c72358
+NIC statistics:
+     peer_ifindex: 35
+
+
+该veth***是一个veth类型的虚拟网口，其ifindex是36，与之peer的ifindex是35，ip link命令标注的很明显了。
+
+在登陆到容器内部查看，找到那个ifindex为35的接口
+pi@raspberrypi:~ $ docker run -it 647197174783 /bin/sh
+/ # 
+/ # ip link show
+1: lo: <LOOPBACK,UP,LOWER_UP> mtu 65536 qdisc noqueue state UNKNOWN qlen 1
+    link/loopback 00:00:00:00:00:00 brd 00:00:00:00:00:00
+35: eth0@if36: <BROADCAST,MULTICAST,UP,LOWER_UP,M-DOWN> mtu 1500 qdisc noqueue state UP 
+    link/ether 02:42:ac:11:00:02 brd ff:ff:ff:ff:ff:ff
+
+这样两个容器之间就可以互通了。
+eth0@container1 -> veth1@peer -> docker0@bridge -> veth2@peer -> eth0@container2
+/ # ifconfig eth0
+eth0      Link encap:Ethernet  HWaddr 02:42:AC:11:00:02  
+          inet addr:172.17.0.2  Bcast:0.0.0.0  Mask:255.255.0.0
+          inet6 addr: fe80::42:acff:fe11:2%6/64 Scope:Link
+          UP BROADCAST RUNNING MULTICAST  MTU:1500  Metric:1
+          RX packets:54 errors:0 dropped:0 overruns:0 frame:0
+          TX packets:9 errors:0 dropped:0 overruns:0 carrier:0
+          collisions:0 txqueuelen:0 
+          RX bytes:13374 (13.0 KiB)  TX bytes:738 (738.0 B)
+
+/ # ping 172.17.0.3
+PING 172.17.0.3 (172.17.0.3): 56 data bytes
+64 bytes from 172.17.0.3: seq=0 ttl=64 time=0.608 ms
+64 bytes from 172.17.0.3: seq=1 ttl=64 time=0.272 ms
+
+具体信息可以通过docker命令查询
+pi@raspberrypi:~ $ docker network inspect bridge 
+[
+    {
+        "Name": "bridge",
+        "Id": "e471371013ae52a24301548c35c6a385689b7b905809304f1565152ee6b24ff7",
+        "Scope": "local",
+        "Driver": "bridge",
+        "EnableIPv6": false,
+        "IPAM": {
+            "Driver": "default",
+            "Options": null,
+            "Config": [
+                {
+                    "Subnet": "172.17.0.0/16",
+                    "Gateway": "172.17.0.1"
+                }
+            ]
+        },
+        "Internal": false,
+        "Containers": {
+            "6e93cf3c49e33122644778ff6946715e8cb997cc74b8ee259db777fe7a494063": {
+                "Name": "modest_aryabhata",
+                "EndpointID": "17d9cc511a516c00fc264f21335a68bfbe4321e45f315b24257d61134bbb5261",
+                "MacAddress": "02:42:ac:11:00:03",
+                "IPv4Address": "172.17.0.3/16",
+                "IPv6Address": ""
+            },
+            "d012bc351b154373e014f9c1e5eac36bb5f0a737369ffc077558e05511aac01c": {
+                "Name": "angry_hugle",
+                "EndpointID": "c52bca58c901749b2dcab5bef829b35fce879f9900c16e34c7e74aa02bbbfbdb",
+                "MacAddress": "02:42:ac:11:00:02",
+                "IPv4Address": "172.17.0.2/16",
+                "IPv6Address": ""
+            }
+        },
+        "Options": {
+            "com.docker.network.bridge.default_bridge": "true",
+            "com.docker.network.bridge.enable_icc": "true",
+            "com.docker.network.bridge.enable_ip_masquerade": "true",
+            "com.docker.network.bridge.host_binding_ipv4": "0.0.0.0",
+            "com.docker.network.bridge.name": "docker0",
+            "com.docker.network.driver.mtu": "1500"
+        },
+        "Labels": {}
+    }
+]
+
+
+
+
+
+
+
+
